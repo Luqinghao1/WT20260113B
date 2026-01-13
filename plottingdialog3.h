@@ -3,9 +3,10 @@
  * 文件作用: 试井分析曲线（双对数曲线）配置对话框头文件
  * 功能描述:
  * 1. 界面分为数据设置、计算设置、样式设置三部分。
- * 2. 计算设置中，初始压力根据试井类型（压降/压恢）动态启用/禁用，并自动获取默认值。
- * 3. 样式设置支持压差和导数曲线的独立配置（包含线宽）。
- * 4. 样式控件采用图标可视化显示。
+ * 2. 初始压力根据试井类型动态启用。
+ * 3. 样式设置支持图标可视化。
+ * 4. 默认名称为“试井分析+数字”。
+ * 5. “显示数据来源”格式为 (文件名)。
  */
 
 #ifndef PLOTTINGDIALOG3_H
@@ -50,7 +51,7 @@ public:
     bool isSmoothEnabled() const;
     int getSmoothFactor() const;
 
-    // --- 坐标轴标签默认值 (无需UI输入) ---
+    // --- 坐标轴标签默认值 ---
     QString getXLabel() const { return "dt (h)"; }
     QString getYLabel() const { return "Delta P / Derivative (MPa)"; }
 
@@ -87,18 +88,25 @@ private slots:
     // 平滑开关切换
     void onSmoothToggled(bool checked);
 
+    // 显示数据来源复选框改变
+    void onShowSourceChanged(bool checked);
+
 private:
     Ui::PlottingDialog3 *ui;
     QMap<QString, QStandardItemModel*> m_dataMap;
     QStandardItemModel* m_currentModel;
 
-    static int s_counter;
+    static int s_counter; // 用于实现“数字自小到大自动排序”
+    QString m_lastSuffix;
 
     // --- 辅助函数 ---
     void populateComboBoxes();
     void updateInitialPressureDefault(); // 更新初始压力默认值
 
-    void setupStyleUI(); // 初始化样式下拉框
+    // 更新曲线名称后缀
+    void updateNameSuffix();
+
+    void setupStyleUI();
     void initColorComboBox(QComboBox* combo);
     QIcon createPointIcon(QCPScatterStyle::ScatterShape shape);
     QIcon createLineIcon(Qt::PenStyle style);

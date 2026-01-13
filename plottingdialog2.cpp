@@ -5,7 +5,8 @@
  * 1. 实现双文件数据源的选择与联动。
  * 2. 产量部分支持根据“绘图类型”动态显示/隐藏样式设置控件。
  * 3. 样式UI完全中文化、图表化。
- * 4. [新增] 获取“在新建窗口显示”勾选框状态。
+ * 4. 默认名称前缀为“压力产量分析”。
+ * 5. “显示数据来源”格式为 (File1&File2)。
  */
 
 #include "plottingdialog2.h"
@@ -28,8 +29,8 @@ PlottingDialog2::PlottingDialog2(const QMap<QString, QStandardItemModel*>& model
     // 1. 初始化样式UI (下拉框内容填充)
     setupStyleUI();
 
-    // 2. 设置默认名称
-    ui->lineEdit_Name->setText(QString("双坐标图表 %1").arg(s_chartCounter++));
+    // 2. 设置默认名称：压力产量分析 + 数字
+    ui->lineEdit_Name->setText(QString("压力产量分析 %1").arg(s_chartCounter++));
 
     // 3. 汉化按钮
     ui->buttonBox->button(QDialogButtonBox::Ok)->setText("确定");
@@ -56,6 +57,7 @@ PlottingDialog2::PlottingDialog2(const QMap<QString, QStandardItemModel*>& model
     connect(ui->combo_PressFile, SIGNAL(currentIndexChanged(int)), this, SLOT(onPressFileChanged(int)));
     connect(ui->combo_ProdFile, SIGNAL(currentIndexChanged(int)), this, SLOT(onProdFileChanged(int)));
     connect(ui->combo_ProdType, SIGNAL(currentIndexChanged(int)), this, SLOT(onProdTypeChanged(int)));
+    connect(ui->check_ShowSource, &QCheckBox::toggled, this, &PlottingDialog2::onShowSourceChanged);
 
     // 6. 初始状态触发
     if (ui->combo_PressFile->count() > 0) {
@@ -83,6 +85,7 @@ void PlottingDialog2::onPressFileChanged(int index) {
     QString key = ui->combo_PressFile->currentData().toString();
     m_pressModel = m_dataMap.value(key, nullptr);
     populatePressColumns();
+    updateNameSuffix();
 }
 
 void PlottingDialog2::onProdFileChanged(int index) {
@@ -90,6 +93,48 @@ void PlottingDialog2::onProdFileChanged(int index) {
     QString key = ui->combo_ProdFile->currentData().toString();
     m_prodModel = m_dataMap.value(key, nullptr);
     populateProdColumns();
+    updateNameSuffix();
+}
+
+void PlottingDialog2::onShowSourceChanged(bool checked)
+{
+    Q_UNUSED(checked);
+    updateNameSuffix();
+}
+
+void PlottingDialog2::updateNameSuffix()
+{
+    // 1. 获取当前文本
+    QString currentName = ui->lineEdit_Name->text();
+
+    // 2. 移除上一次添加的后缀
+    if (!m_lastSuffix.isEmpty() && currentName.endsWith(m_lastSuffix)) {
+        currentName.chop(m_lastSuffix.length());
+    }
+
+    // 3. 生成新后缀: (File1) 或 (File1&File2)
+    QString newSuffix = "";
+    if (ui->check_ShowSource->isChecked()) {
+        QString filePress = ui->combo_PressFile->currentData().toString();
+        QString fileProd = ui->combo_ProdFile->currentData().toString();
+
+        QString namePress = QFileInfo(filePress).completeBaseName();
+        QString nameProd = QFileInfo(fileProd).completeBaseName();
+
+        if (namePress.isEmpty() && nameProd.isEmpty()) {
+            newSuffix = "";
+        } else if (namePress == nameProd || nameProd.isEmpty()) {
+            newSuffix = QString(" (%1)").arg(namePress);
+        } else if (namePress.isEmpty()) {
+            newSuffix = QString(" (%1)").arg(nameProd);
+        } else {
+            newSuffix = QString(" (%1&%2)").arg(namePress, nameProd);
+        }
+    }
+
+    // 4. 应用
+    ui->lineEdit_Name->setText(currentName + newSuffix);
+    m_lastSuffix = newSuffix;
 }
 
 void PlottingDialog2::populatePressColumns() {
@@ -127,8 +172,8 @@ void PlottingDialog2::populateProdColumns() {
 void PlottingDialog2::onProdTypeChanged(int index)
 {
     // index: 0=阶梯图, 1=折线图, 2=散点图
-    bool showPointSettings = (index == 2); // 只有散点图显示点设置
-    bool showLineSettings = true;          // 所有类型都允许设置线(阶梯线/折线/散点连线)
+    bool showPointSettings = (index == 2);
+    bool showLineSettings = true;
 
     ui->label_ProdPointShape->setVisible(showPointSettings);
     ui->combo_ProdPointShape->setVisible(showPointSettings);
@@ -190,16 +235,13 @@ void PlottingDialog2::setupStyleUI()
     }
 
     // 6. 设置默认值
-    // 压力: 红色实心点，无连线
     int redIdx = ui->combo_PressPointColor->findData(QColor(Qt::red));
     if(redIdx != -1) ui->combo_PressPointColor->setCurrentIndex(redIdx);
-    ui->combo_PressPointShape->setCurrentIndex(0); // 实心圆
-    ui->combo_PressLineStyle->setCurrentIndex(0);  // 无
+    ui->combo_PressPointShape->setCurrentIndex(0);
+    ui->combo_PressLineStyle->setCurrentIndex(0);
 
-    // 产量: 蓝色，阶梯图，无点，蓝色实线(默认类型为阶梯图时，点设置隐藏，但这里预设好)
     int blueIdx = ui->combo_ProdLineColor->findData(QColor(Qt::blue));
     if(blueIdx != -1) ui->combo_ProdLineColor->setCurrentIndex(blueIdx);
-    // 线型默认实线(因为阶梯图需要线)
     int solidIdx = ui->combo_ProdLineStyle->findData((int)Qt::SolidLine);
     if(solidIdx != -1) ui->combo_ProdLineStyle->setCurrentIndex(solidIdx);
 
@@ -304,7 +346,6 @@ QColor PlottingDialog2::getProdLineColor() const {
 }
 int PlottingDialog2::getProdLineWidth() const { return ui->spin_ProdLineWidth->value(); }
 
-// [新增] 返回新建窗口勾选状态
 bool PlottingDialog2::isNewWindow() const {
     return ui->check_NewWindow->isChecked();
 }

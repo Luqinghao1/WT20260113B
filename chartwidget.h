@@ -3,8 +3,9 @@
  * 文件作用: 通用图表组件头文件
  * 功能描述:
  * 1. 封装 MouseZoom (继承自 QCustomPlot)，提供统一的图表展示界面。
- * 2. 管理图表标题 (QCPTextElement)，确保导出图片时包含标题。
- * 3. [新增] 添加 titleChanged 和 graphsChanged 信号，支持标题和图例的双向同步。
+ * 2. 管理图表标题 (QCPTextElement)。
+ * 3. [新增] 支持开/关井事件线的绘制，且在双坐标系下同时显示。
+ * 4. [新增] 支持事件线跟随产量数据横向移动。
  */
 
 #ifndef CHARTWIDGET_H
@@ -57,15 +58,18 @@ public:
 
     void clearGraphs();
 
+    // [新增] 清除所有开/关井线
+    void clearEventLines();
+    // [新增] 添加开/关井线 (type: 0=关井/红, 1=开井/绿)
+    void addEventLine(double x, int type);
+
 protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 signals:
     void exportDataTriggered();
     void graphDataModified(QCPGraph* graph);
-    // [新增] 标题变更信号
     void titleChanged(const QString& newTitle);
-    // [新增] 曲线信息（如名称/图例）变更信号
     void graphsChanged();
 
 private slots:
@@ -79,6 +83,9 @@ private slots:
     void onLineStyleRequested(QCPItemLine* line);
     void onDeleteSelectedRequested();
     void onEditItemRequested(QCPAbstractItem* item);
+
+    // 开/关井线设置槽函数
+    void onEventLineSettingsTriggered();
 
     void onPlotMousePress(QMouseEvent* event);
     void onPlotMouseMove(QMouseEvent* event);
@@ -122,6 +129,9 @@ private:
     QCPAxisRect* m_bottomRect;
 
     QMap<QCPItemLine*, ChartAnnotation> m_annotations;
+
+    // [新增] 存储事件线列表
+    QList<QCPItemLine*> m_eventLines;
 
     enum InteractionMode {
         Mode_None,

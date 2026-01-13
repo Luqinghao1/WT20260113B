@@ -2,10 +2,9 @@
  * 文件名: chartwidget.cpp
  * 文件作用: 通用图表组件实现文件
  * 功能描述:
- * 1. [修复] setChartMode 中使用 take() 安全移除图例，防止 Layout 析构导致图例对象被删除，解决闪退。
- * 2. 封装 QCustomPlot，提供标准化的图表显示和交互功能。
- * 3. 支持单坐标（Mode_Single）和双坐标（Mode_Stacked）模式切换。
- * 4. 实现了标识线、标注、数据移动、缩放和图片导出等功能。
+ * 1. 封装 QCustomPlot 基础功能。
+ * 2. [新增] 在 addEventLine 中确保上下坐标系都创建线条，并设置 overlay 图层防止遮挡。
+ * 3. [新增] 在 onPlotMouseMove 中实现：当移动产量曲线时，开/关井线同步移动。
  */
 
 #include "chartwidget.h"
@@ -166,27 +165,94 @@ void ChartWidget::setDataModel(QStandardItemModel *model) { m_dataModel = model;
 
 void ChartWidget::clearGraphs() {
     m_plot->clearGraphs();
+    clearEventLines();
     m_plot->replot();
     exitMoveDataMode();
     setZoomDragMode(Qt::Horizontal | Qt::Vertical);
 }
 
-// [核心修复] 在切换模式重建布局时，确保图例被安全地保留并重新添加到新的 AxisRect 中
+// [修改] 清除事件线
+void ChartWidget::clearEventLines() {
+    for (auto line : m_eventLines) {
+        if (m_plot->hasItem(line)) {
+            m_plot->removeItem(line);
+        }
+    }
+    m_eventLines.clear();
+}
+
+// [修改] 添加开/关井线，确保上下坐标系都有
+void ChartWidget::addEventLine(double x, int type) {
+    // type: 0 = Shut-in (Red), 1 = Open (Green)
+    QColor color = (type == 0) ? Qt::red : Qt::green;
+    QPen pen(color);
+    pen.setStyle(Qt::DashLine);
+    pen.setWidth(2);
+
+    auto createLine = [&](QCPAxisRect* rect) -> QCPItemLine* {
+        if (!rect) return nullptr;
+        QCPItemLine* line = new QCPItemLine(m_plot);
+        line->setClipAxisRect(rect);
+        line->setClipToAxisRect(true);
+
+        // 设置 X 为绘图坐标，Y 为比例坐标 (0-1)，从而垂直贯穿整个区域
+        line->start->setTypeX(QCPItemPosition::ptPlotCoords);
+        line->start->setTypeY(QCPItemPosition::ptAxisRectRatio);
+        line->end->setTypeX(QCPItemPosition::ptPlotCoords);
+        line->end->setTypeY(QCPItemPosition::ptAxisRectRatio);
+
+        line->start->setCoords(x, 1); // 1 is bottom
+        line->end->setCoords(x, 0);   // 0 is top
+
+        line->setPen(pen);
+        line->setSelectedPen(QPen(Qt::blue, 2, Qt::DashLine));
+        line->setProperty("isEventLine", true);
+
+        // 确保显示在最上层
+        line->setLayer("overlay");
+
+        return line;
+    };
+
+    QCPItemLine* lineTop = nullptr;
+    QCPItemLine* lineBottom = nullptr;
+
+    if (m_chartMode == Mode_Stacked) {
+        // 双坐标模式：分别为上下两个 Rect 创建线条
+        lineTop = createLine(m_topRect);
+        lineBottom = createLine(m_bottomRect);
+    } else {
+        // 单坐标模式
+        lineTop = createLine(m_plot->axisRect());
+    }
+
+    // 建立联动关系
+    if (lineTop && lineBottom) {
+        QVariant vTop; vTop.setValue(reinterpret_cast<void*>(lineBottom));
+        lineTop->setProperty("sibling", vTop);
+
+        QVariant vBot; vBot.setValue(reinterpret_cast<void*>(lineTop));
+        lineBottom->setProperty("sibling", vBot);
+    }
+
+    if (lineTop) m_eventLines.append(lineTop);
+    if (lineBottom) m_eventLines.append(lineBottom);
+
+    m_plot->replot();
+}
+
 void ChartWidget::setChartMode(ChartMode mode) {
     if (m_chartMode == mode) return;
     m_chartMode = mode;
 
     exitMoveDataMode();
 
-    // 1. 清除旧的布局元素 (保留标题)
     int rowCount = m_plot->plotLayout()->rowCount();
     for(int i = rowCount - 1; i > 0; --i) {
         m_plot->plotLayout()->removeAt(i);
     }
     m_plot->plotLayout()->simplify();
 
-    // 2. [安全移除图例] 使用 take() 而不是 remove()
-    // 这样做可以确保图例对象从布局中剥离，但所有权仍归 QCustomPlot (或者悬空)，防止被 Layout 析构时连带删除
     if (m_plot->legend && m_plot->legend->layout()) {
         m_plot->legend->layout()->take(m_plot->legend);
     }
@@ -199,7 +265,6 @@ void ChartWidget::setChartMode(ChartMode mode) {
         m_bottomRect = nullptr;
         setZoomDragMode(Qt::Horizontal | Qt::Vertical);
 
-        // 将图例重新添加到新的 defaultRect
         if (defaultRect->insetLayout() && m_plot->legend) {
             defaultRect->insetLayout()->addElement(m_plot->legend, Qt::AlignTop | Qt::AlignRight);
         }
@@ -221,13 +286,12 @@ void ChartWidget::setChartMode(ChartMode mode) {
         connect(m_bottomRect->axis(QCPAxis::atBottom), SIGNAL(rangeChanged(QCPRange)),
                 m_topRect->axis(QCPAxis::atBottom), SLOT(setRange(QCPRange)));
 
-        // 将图例重新添加到顶部的 m_topRect
         if (m_topRect->insetLayout() && m_plot->legend) {
             m_topRect->insetLayout()->addElement(m_plot->legend, Qt::AlignTop | Qt::AlignRight);
         }
     }
 
-    if (m_plot->legend) m_plot->legend->setVisible(true); // 确保可见
+    if (m_plot->legend) m_plot->legend->setVisible(true);
     m_plot->replot();
 }
 
@@ -261,7 +325,6 @@ void ChartWidget::on_btnSetting_clicked() {
 
     ChartSetting1 dlg(m_plot, m_titleElement, this);
 
-    // 无论点击 OK 还是 Cancel (如果包含 Apply 逻辑)，都尝试同步
     dlg.exec();
 
     refreshTitleElement();
@@ -273,7 +336,7 @@ void ChartWidget::on_btnSetting_clicked() {
             emit titleChanged(newTitle);
         }
     }
-    emit graphsChanged(); // 发出图例可能变更的信号
+    emit graphsChanged();
 }
 
 void ChartWidget::on_btnReset_clicked() {
@@ -340,6 +403,19 @@ double ChartWidget::distToSegment(const QPointF& p, const QPointF& s, const QPoi
 
 void ChartWidget::onPlotMousePress(QMouseEvent* event) {
     if (event->button() == Qt::RightButton) {
+        // [新增] 优先检查是否击中事件线
+        for (auto line : m_eventLines) {
+            double dist = line->selectTest(event->pos(), false);
+            if (dist >= 0 && dist < 10.0) {
+                m_activeLine = line; // 临时标记为活动线用于菜单上下文
+                QMenu menu(this);
+                QAction* actSetting = menu.addAction("开/关井线设置...");
+                connect(actSetting, &QAction::triggered, this, &ChartWidget::onEventLineSettingsTriggered);
+                menu.exec(event->globalPosition().toPoint());
+                return;
+            }
+        }
+
         if (m_chartMode == Mode_Stacked) {
             QMenu menu(this);
             QAction* actMoveX = menu.addAction("数据横向移动 (X Only)");
@@ -379,9 +455,30 @@ void ChartWidget::onPlotMousePress(QMouseEvent* event) {
             }
         }
     }
+
+    // [新增] 事件线选中逻辑
+    for (auto line : m_eventLines) {
+        if (line->selectTest(event->pos(), false) < tolerance) {
+            m_plot->deselectAll();
+            line->setSelected(true);
+
+            // 联动选中 sibling
+            QVariant v = line->property("sibling");
+            if (v.isValid()) {
+                QCPItemLine* sibling = static_cast<QCPItemLine*>(v.value<void*>());
+                if (sibling) sibling->setSelected(true);
+            }
+
+            m_interMode = Mode_None; // 事件线不支持拖拽，仅支持选中
+            m_plot->replot();
+            return;
+        }
+    }
+
     for (int i = 0; i < m_plot->itemCount(); ++i) {
         auto line = qobject_cast<QCPItemLine*>(m_plot->item(i));
-        if (line && !line->property("isCharacteristic").isValid()) {
+        // 排除事件线
+        if (line && !line->property("isCharacteristic").isValid() && !line->property("isEventLine").isValid()) {
             double x1 = m_plot->xAxis->coordToPixel(line->start->coords().x()), y1 = m_plot->yAxis->coordToPixel(line->start->coords().y());
             double x2 = m_plot->xAxis->coordToPixel(line->end->coords().x()), y2 = m_plot->yAxis->coordToPixel(line->end->coords().y());
             QPointF p(event->pos());
@@ -404,6 +501,28 @@ void ChartWidget::onPlotMousePress(QMouseEvent* event) {
 
     m_plot->deselectAll();
     m_plot->replot();
+}
+
+// [新增] 开/关井线设置槽函数
+void ChartWidget::onEventLineSettingsTriggered() {
+    if (!m_activeLine) return;
+
+    StyleSelectorDialog dlg(StyleSelectorDialog::ModeLine, this);
+    dlg.setWindowTitle("开/关井线设置");
+    dlg.setPen(m_activeLine->pen());
+
+    if (dlg.exec() == QDialog::Accepted) {
+        QPen newPen = dlg.getPen();
+        m_activeLine->setPen(newPen);
+
+        // 联动应用到 sibling
+        QVariant v = m_activeLine->property("sibling");
+        if (v.isValid()) {
+            QCPItemLine* sibling = static_cast<QCPItemLine*>(v.value<void*>());
+            if (sibling) sibling->setPen(newPen);
+        }
+        m_plot->replot();
+    }
 }
 
 void ChartWidget::onPlotMouseMove(QMouseEvent* event) {
@@ -429,6 +548,21 @@ void ChartWidget::onPlotMouseMove(QMouseEvent* event) {
             for (auto it = data->begin(); it != data->end(); ++it) {
                 if (m_interMode == Mode_Moving_Data_X) it->key += dx;
                 else it->value += dy;
+            }
+
+            // [新增] 同步移动开/关井线
+            // 只有当横向移动，且移动的曲线位于下方坐标系（产量）时，事件线才跟随移动
+            // 或者，如果项目约定所有事件线都应跟随产量移动，只要 m_movingGraph 是产量曲线即可
+            if (m_interMode == Mode_Moving_Data_X && !m_eventLines.isEmpty()) {
+                // 简单判断：如果当前操作的 graph 在 bottomRect 中，则移动线
+                if (m_chartMode == Mode_Stacked && m_movingGraph->keyAxis()->axisRect() == m_bottomRect) {
+                    for(auto line : m_eventLines) {
+                        double currentX = line->start->coords().x();
+                        double newX = currentX + dx;
+                        line->start->setCoords(newX, line->start->coords().y());
+                        line->end->setCoords(newX, line->end->coords().y());
+                    }
+                }
             }
 
             m_plot->replot();
@@ -644,4 +778,3 @@ void ChartWidget::deleteSelectedItems() {
     }
     m_plot->replot();
 }
-

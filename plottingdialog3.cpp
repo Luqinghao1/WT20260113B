@@ -3,8 +3,10 @@
  * 文件作用: 试井分析曲线配置对话框实现
  * 功能描述:
  * 1. 实现了三段式布局逻辑：数据、计算、样式。
- * 2. 实现了初始压力的自动获取逻辑（读取选中列的第一行数据）。
+ * 2. 实现了初始压力的自动获取逻辑。
  * 3. 样式设置采用了统一的图标+中文风格。
+ * 4. 默认名称前缀为“试井分析”。
+ * 5. “显示数据来源”格式为 (文件名)。
  */
 
 #include "plottingdialog3.h"
@@ -26,7 +28,7 @@ PlottingDialog3::PlottingDialog3(const QMap<QString, QStandardItemModel*>& model
     // 1. 初始化样式控件
     setupStyleUI();
 
-    // 2. 设置默认名称
+    // 2. 设置默认名称：试井分析 + 数字
     ui->lineEdit_Name->setText(QString("试井分析 %1").arg(s_counter++));
 
     // 3. 汉化按钮
@@ -53,6 +55,7 @@ PlottingDialog3::PlottingDialog3(const QMap<QString, QStandardItemModel*>& model
     connect(ui->radioBuildup, &QRadioButton::toggled, this, &PlottingDialog3::onTestTypeChanged);
 
     connect(ui->checkSmooth, &QCheckBox::toggled, this, &PlottingDialog3::onSmoothToggled);
+    connect(ui->check_ShowSource, &QCheckBox::toggled, this, &PlottingDialog3::onShowSourceChanged);
 
     // 6. 初始状态触发
     // 默认压降试井
@@ -80,6 +83,40 @@ void PlottingDialog3::onFileChanged(int index)
     QString key = ui->comboFileSelect->currentData().toString();
     m_currentModel = m_dataMap.value(key, nullptr);
     populateComboBoxes();
+
+    // 文件改变更新后缀
+    updateNameSuffix();
+}
+
+void PlottingDialog3::onShowSourceChanged(bool checked)
+{
+    Q_UNUSED(checked);
+    updateNameSuffix();
+}
+
+void PlottingDialog3::updateNameSuffix()
+{
+    // 1. 获取当前文本
+    QString currentName = ui->lineEdit_Name->text();
+
+    // 2. 移除上一次添加的后缀
+    if (!m_lastSuffix.isEmpty() && currentName.endsWith(m_lastSuffix)) {
+        currentName.chop(m_lastSuffix.length());
+    }
+
+    // 3. 生成新后缀：(文件名)
+    QString newSuffix = "";
+    if (ui->check_ShowSource->isChecked()) {
+        QString filePath = ui->comboFileSelect->currentData().toString();
+        if (!filePath.isEmpty()) {
+            QFileInfo fi(filePath);
+            newSuffix = QString(" (%1)").arg(fi.completeBaseName());
+        }
+    }
+
+    // 4. 应用
+    ui->lineEdit_Name->setText(currentName + newSuffix);
+    m_lastSuffix = newSuffix;
 }
 
 void PlottingDialog3::populateComboBoxes()
@@ -97,7 +134,6 @@ void PlottingDialog3::populateComboBoxes()
     ui->comboTime->addItems(headers);
     ui->comboPress->addItems(headers);
 
-    // 默认尝试选中前两列
     if(headers.count() > 0) ui->comboTime->setCurrentIndex(0);
     if(headers.count() > 1) ui->comboPress->setCurrentIndex(1);
 }
@@ -111,8 +147,6 @@ void PlottingDialog3::onPressureColumnChanged(int index)
 void PlottingDialog3::onTestTypeChanged()
 {
     bool isDrawdown = ui->radioDrawdown->isChecked();
-    // 压降试井：启用输入，且尝试自动设置默认值
-    // 压恢试井：禁用输入
     ui->spinPi->setEnabled(isDrawdown);
     ui->labelPi->setEnabled(isDrawdown);
 
@@ -123,7 +157,6 @@ void PlottingDialog3::onTestTypeChanged()
 
 void PlottingDialog3::updateInitialPressureDefault()
 {
-    // 仅当压降试井时更新
     if (!ui->radioDrawdown->isChecked()) return;
     if (!m_currentModel) return;
 
@@ -183,24 +216,22 @@ void PlottingDialog3::setupStyleUI()
     }
 
     // 5. 设置默认值
-    // 压差：红色实心圆，无连线
     int redIdx = ui->comboPressPointColor->findData(QColor(Qt::red));
     if(redIdx != -1) {
         ui->comboPressPointColor->setCurrentIndex(redIdx);
         ui->comboPressLineColor->setCurrentIndex(redIdx);
     }
-    ui->comboPressShape->setCurrentIndex(0); // 实心圆
-    ui->comboPressLine->setCurrentIndex(0);  // 无
+    ui->comboPressShape->setCurrentIndex(0);
+    ui->comboPressLine->setCurrentIndex(0);
     ui->spinPressLineWidth->setValue(2);
 
-    // 导数：蓝色三角形，无连线
     int blueIdx = ui->comboDerivPointColor->findData(QColor(Qt::blue));
     if(blueIdx != -1) {
         ui->comboDerivPointColor->setCurrentIndex(blueIdx);
         ui->comboDerivLineColor->setCurrentIndex(blueIdx);
     }
-    ui->comboDerivShape->setCurrentIndex(4); // 三角形
-    ui->comboDerivLine->setCurrentIndex(0);  // 无
+    ui->comboDerivShape->setCurrentIndex(4);
+    ui->comboDerivLine->setCurrentIndex(0);
     ui->spinDerivLineWidth->setValue(2);
 }
 

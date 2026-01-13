@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>500</height>
+    <height>520</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -116,34 +116,41 @@ QCheckBox::indicator:checked {
       <item row="0" column="1">
        <widget class="QLineEdit" name="lineEdit_Name"/>
       </item>
-      <item row="1" column="0">
+      <item row="1" column="1">
+       <widget class="QCheckBox" name="check_ShowSource">
+        <property name="text">
+         <string>显示数据来源</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
        <widget class="QLabel" name="label_Source">
         <property name="text">
          <string>数据文件:</string>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="2" column="1">
        <widget class="QComboBox" name="comboFileSelect"/>
       </item>
-      <item row="2" column="0">
+      <item row="3" column="0">
        <widget class="QLabel" name="label_X">
         <property name="text">
          <string>X轴数据:</string>
         </property>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="3" column="1">
        <widget class="QComboBox" name="combo_XCol"/>
       </item>
-      <item row="3" column="0">
+      <item row="4" column="0">
        <widget class="QLabel" name="label_Y">
         <property name="text">
          <string>Y轴数据:</string>
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
+      <item row="4" column="1">
        <widget class="QComboBox" name="combo_YCol"/>
       </item>
      </layout>

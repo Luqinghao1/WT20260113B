@@ -4,10 +4,9 @@
  * 功能描述:
  * 1. 设置曲线基础信息（名称、数据源）。
  * 2. 选择X/Y数据列。
- * 3. [修改] 样式设置：
- * - 纯中文界面，移除了所有英文说明。
- * - 点形状和线类型下拉框增加所见即所得的图标预览。
- * - 颜色下拉框继续保持颜色块预览。
+ * 3. 样式设置：纯中文界面，支持图标预览。
+ * 4. 默认名称逻辑：默认为纵轴数据列名（取 \ 前内容）。
+ * 5. 数据来源后缀格式改为 (文件名)。
  */
 
 #ifndef PLOTTINGDIALOG1_H
@@ -61,6 +60,12 @@ private slots:
     // 数据源文件改变时触发
     void onFileChanged(int index);
 
+    // [新增] Y轴列改变时触发（用于更新默认名称）
+    void onYColumnChanged(int index);
+
+    // 显示数据来源复选框状态改变时触发
+    void onShowSourceChanged(bool checked);
+
 private:
     Ui::PlottingDialog1 *ui;
 
@@ -69,14 +74,22 @@ private:
     // 当前选中的模型指针
     QStandardItemModel* m_currentModel;
 
-    static int s_curveCounter; // 静态计数器，用于生成默认名称
+    // 移除了静态计数器，因为名称由列名决定
+
+    // 记录上一次自动追加的后缀，用于更新或移除
+    QString m_lastSuffix;
 
     // 辅助函数
     void populateComboBoxes(); // 根据当前模型初始化数据列下拉框
     void setupStyleUI();       // 初始化样式控件（填充下拉框内容）
     void initColorComboBox(QComboBox* combo); // 通用函数：填充颜色下拉框
 
-    // [新增] 图标生成辅助函数
+    // 生成基础名称（基于Y轴列名）
+    void updateBaseName();
+    // 更新曲线名称后缀
+    void updateNameSuffix();
+
+    // 图标生成辅助函数
     QIcon createPointIcon(QCPScatterStyle::ScatterShape shape);
     QIcon createLineIcon(Qt::PenStyle style);
 };

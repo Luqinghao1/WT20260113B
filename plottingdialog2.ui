@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>700</width>
-    <height>540</height>
+    <height>560</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -57,7 +57,7 @@ QPushButton:hover { background-color: #e0e0e0; border-color: #0078d7; }
 QCheckBox {
     color: #333333;
     spacing: 8px;
-    margin-top: 10px;
+    margin-top: 5px;
 }
 QCheckBox::indicator {
     width: 18px;
@@ -89,6 +89,13 @@ QCheckBox::indicator:checked {
       <widget class="QLineEdit" name="lineEdit_Name"/>
      </item>
     </layout>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="check_ShowSource">
+     <property name="text">
+      <string>显示数据来源</string>
+     </property>
+    </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_Content">

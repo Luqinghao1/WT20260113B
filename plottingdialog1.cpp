@@ -3,10 +3,9 @@
  * 文件作用: 新建单一曲线配置对话框实现
  * 功能描述:
  * 1. 实现数据列加载，支持多文件切换联动。
- * 2. [修改] 样式设置 UI 优化：
- * - 移除了下拉框中的英文描述。
- * - 为点形状和线类型增加了动态生成的预览图标。
- * - 颜色选择纯中文化。
+ * 2. 样式设置 UI 优化（纯中文、图标预览）。
+ * 3. 默认名称跟随 Y 轴列名变化，遇到特殊字符 '\' 只取前面部分。
+ * 4. “显示数据来源”格式为 (文件名)。
  */
 
 #include "plottingdialog1.h"
@@ -14,9 +13,6 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QPixmap>
-
-// 初始化静态计数器
-int PlottingDialog1::s_curveCounter = 1;
 
 PlottingDialog1::PlottingDialog1(const QMap<QString, QStandardItemModel*>& models, QWidget *parent) :
     QDialog(parent),
@@ -33,10 +29,7 @@ PlottingDialog1::PlottingDialog1(const QMap<QString, QStandardItemModel*>& model
     ui->buttonBox->button(QDialogButtonBox::Ok)->setText("确定");
     ui->buttonBox->button(QDialogButtonBox::Cancel)->setText("取消");
 
-    // 3. 设置默认名称
-    ui->lineEdit_Name->setText(QString("曲线 %1").arg(s_curveCounter++));
-
-    // 4. 初始化文件选择下拉框
+    // 3. 初始化文件选择下拉框
     ui->comboFileSelect->clear();
     if (m_dataMap.isEmpty()) {
         ui->comboFileSelect->setEnabled(false);
@@ -48,10 +41,13 @@ PlottingDialog1::PlottingDialog1(const QMap<QString, QStandardItemModel*>& model
         }
     }
 
-    // 5. 信号连接
+    // 4. 信号连接
     connect(ui->comboFileSelect, SIGNAL(currentIndexChanged(int)), this, SLOT(onFileChanged(int)));
+    // [新增] 连接 Y 轴变化信号
+    connect(ui->combo_YCol, SIGNAL(currentIndexChanged(int)), this, SLOT(onYColumnChanged(int)));
+    connect(ui->check_ShowSource, &QCheckBox::toggled, this, &PlottingDialog1::onShowSourceChanged);
 
-    // 6. 触发初始加载
+    // 5. 触发初始加载
     if (ui->comboFileSelect->count() > 0) {
         ui->comboFileSelect->setCurrentIndex(0);
         onFileChanged(0);
@@ -73,33 +69,96 @@ void PlottingDialog1::onFileChanged(int index)
     } else {
         m_currentModel = nullptr;
     }
-    populateComboBoxes();
+    populateComboBoxes(); // 这里面会触发 YCol 的变化，从而触发 onYColumnChanged 更新名称
 }
 
 void PlottingDialog1::populateComboBoxes()
 {
+    // 暂时阻塞 Y 轴信号，以免清空时触发不必要的逻辑，待填充完毕后再处理
+    bool oldState = ui->combo_YCol->blockSignals(true);
+
     ui->combo_XCol->clear();
     ui->combo_YCol->clear();
 
-    if (!m_currentModel) return;
+    if (m_currentModel) {
+        QStringList headers;
+        for(int i=0; i<m_currentModel->columnCount(); ++i) {
+            QStandardItem* item = m_currentModel->horizontalHeaderItem(i);
+            headers << (item ? item->text() : QString("列 %1").arg(i+1));
+        }
+        ui->combo_XCol->addItems(headers);
+        ui->combo_YCol->addItems(headers);
 
-    QStringList headers;
-    for(int i=0; i<m_currentModel->columnCount(); ++i) {
-        QStandardItem* item = m_currentModel->horizontalHeaderItem(i);
-        headers << (item ? item->text() : QString("列 %1").arg(i+1));
+        if(headers.count() > 0) ui->combo_XCol->setCurrentIndex(0);
+        if(headers.count() > 1) ui->combo_YCol->setCurrentIndex(1);
     }
-    ui->combo_XCol->addItems(headers);
-    ui->combo_YCol->addItems(headers);
 
-    if(headers.count() > 0) ui->combo_XCol->setCurrentIndex(0);
-    if(headers.count() > 1) ui->combo_YCol->setCurrentIndex(1);
+    ui->combo_YCol->blockSignals(oldState);
+
+    // 手动调用一次更新逻辑
+    onYColumnChanged(ui->combo_YCol->currentIndex());
+}
+
+void PlottingDialog1::onYColumnChanged(int index)
+{
+    Q_UNUSED(index);
+    updateBaseName();
+    updateNameSuffix();
+}
+
+void PlottingDialog1::updateBaseName()
+{
+    // 获取当前 Y 轴文本
+    QString yLabel = ui->combo_YCol->currentText();
+    if (yLabel.isEmpty()) return;
+
+    // 规则：只取 '\' 前面的内容
+    // split 返回的列表至少包含一个元素（原字符串），所以 first() 是安全的
+    QString baseName = yLabel.split('\\').first();
+
+    // 设置到输入框 (暂时不带后缀，后缀由 updateNameSuffix 追加)
+    ui->lineEdit_Name->setText(baseName);
+
+    // 清空记录的后缀，因为现在是纯粹的基础名
+    m_lastSuffix.clear();
+}
+
+void PlottingDialog1::onShowSourceChanged(bool checked)
+{
+    Q_UNUSED(checked);
+    updateNameSuffix();
+}
+
+void PlottingDialog1::updateNameSuffix()
+{
+    // 1. 获取当前文本
+    QString currentName = ui->lineEdit_Name->text();
+
+    // 2. 移除上一次添加的后缀（如果存在）
+    if (!m_lastSuffix.isEmpty() && currentName.endsWith(m_lastSuffix)) {
+        currentName.chop(m_lastSuffix.length());
+    }
+
+    // 3. 生成新后缀：(文件名)
+    QString newSuffix = "";
+    if (ui->check_ShowSource->isChecked()) {
+        QString filePath = ui->comboFileSelect->currentData().toString();
+        if (!filePath.isEmpty()) {
+            QFileInfo fi(filePath);
+            newSuffix = QString(" (%1)").arg(fi.completeBaseName());
+        }
+    }
+
+    // 4. 应用新名称并记录后缀
+    ui->lineEdit_Name->setText(currentName + newSuffix);
+    m_lastSuffix = newSuffix;
 }
 
 void PlottingDialog1::setupStyleUI()
 {
     // 1. 填充点形状 (图标 + 纯中文)
     ui->combo_PointShape->clear();
-    ui->combo_PointShape->setIconSize(QSize(16, 16)); // 设置图标大小
+    ui->combo_PointShape->setIconSize(QSize(16, 16));
 
     ui->combo_PointShape->addItem(createPointIcon(QCPScatterStyle::ssDisc), "实心圆", (int)QCPScatterStyle::ssDisc);
     ui->combo_PointShape->addItem(createPointIcon(QCPScatterStyle::ssCircle), "空心圆", (int)QCPScatterStyle::ssCircle);
@@ -112,7 +171,7 @@ void PlottingDialog1::setupStyleUI()
 
     // 2. 填充线型 (宽图标 + 纯中文)
     ui->combo_LineStyle->clear();
-    ui->combo_LineStyle->setIconSize(QSize(32, 16)); // 线条图标宽一些，展示虚线效果
+    ui->combo_LineStyle->setIconSize(QSize(32, 16));
 
     ui->combo_LineStyle->addItem(createLineIcon(Qt::NoPen), "无", (int)Qt::NoPen);
     ui->combo_LineStyle->addItem(createLineIcon(Qt::SolidLine), "实线", (int)Qt::SolidLine);
@@ -125,17 +184,14 @@ void PlottingDialog1::setupStyleUI()
     initColorComboBox(ui->combo_LineColor);
 
     // 4. 设置默认值
-    // 点：默认红色，实心圆
     int redIdx = ui->combo_PointColor->findData(QColor(Qt::red));
     if (redIdx != -1) ui->combo_PointColor->setCurrentIndex(redIdx);
     ui->combo_PointShape->setCurrentIndex(0); // 实心圆
 
-    // 线：默认蓝色，无 (Qt::NoPen)
     int blueIdx = ui->combo_LineColor->findData(QColor(Qt::blue));
     if (blueIdx != -1) ui->combo_LineColor->setCurrentIndex(blueIdx);
     ui->combo_LineStyle->setCurrentIndex(0); // 无
 
-    // 线宽
     ui->spin_LineWidth->setValue(2);
 }
 
@@ -144,72 +200,48 @@ void PlottingDialog1::initColorComboBox(QComboBox* combo)
     combo->clear();
     combo->setIconSize(QSize(16, 16));
 
-    // 定义常用颜色列表 (纯中文)
     struct ColorItem { QString name; QColor color; };
     QList<ColorItem> colors = {
-        {"黑色", Qt::black},
-        {"红色", Qt::red},
-        {"蓝色", Qt::blue},
-        {"绿色", Qt::green},
-        {"青色", Qt::cyan},
-        {"品红", Qt::magenta},
-        {"黄色", Qt::yellow},
-        {"深红", Qt::darkRed},
-        {"深绿", Qt::darkGreen},
-        {"深蓝", Qt::darkBlue},
-        {"灰色", Qt::gray},
-        {"橙色", QColor(255, 165, 0)},
-        {"紫色", QColor(128, 0, 128)},
-        {"棕色", QColor(165, 42, 42)},
-        {"粉色", QColor(255, 192, 203)},
-        {"天蓝", QColor(135, 206, 235)}
+        {"黑色", Qt::black}, {"红色", Qt::red}, {"蓝色", Qt::blue},
+        {"绿色", Qt::green}, {"青色", Qt::cyan}, {"品红", Qt::magenta},
+        {"黄色", Qt::yellow}, {"深红", Qt::darkRed}, {"深绿", Qt::darkGreen},
+        {"深蓝", Qt::darkBlue}, {"灰色", Qt::gray}, {"橙色", QColor(255, 165, 0)},
+        {"紫色", QColor(128, 0, 128)}, {"棕色", QColor(165, 42, 42)},
+        {"粉色", QColor(255, 192, 203)}, {"天蓝", QColor(135, 206, 235)}
     };
 
-    // 生成带颜色块的图标
     for (const auto& item : colors) {
         QPixmap pix(16, 16);
         pix.fill(item.color);
-
         QPainter painter(&pix);
         painter.setPen(Qt::gray);
-        painter.drawRect(0, 0, 15, 15); // 绘制边框
-
+        painter.drawRect(0, 0, 15, 15);
         combo->addItem(QIcon(pix), item.name, item.color);
     }
 }
 
-// [新增] 生成点形状图标
 QIcon PlottingDialog1::createPointIcon(QCPScatterStyle::ScatterShape shape)
 {
     QPixmap pix(16, 16);
     pix.fill(Qt::transparent);
-
     QCPPainter painter(&pix);
     painter.setRenderHint(QPainter::Antialiasing);
-
-    // 使用黑色绘制图标，清晰可见
     QCPScatterStyle ss(shape);
     ss.setPen(QPen(Qt::black));
-    // 对于实心形状(Disc等)填充黑色，空心形状(Circle等)会自动忽略Brush
     ss.setBrush(QBrush(Qt::black));
     ss.setSize(10);
-
-    ss.drawShape(&painter, 8, 8); // 绘制在中心 (8,8)
-
+    ss.drawShape(&painter, 8, 8);
     return QIcon(pix);
 }
 
-// [新增] 生成线型图标
 QIcon PlottingDialog1::createLineIcon(Qt::PenStyle style)
 {
-    QPixmap pix(32, 16); // 宽度32，适合展示虚线模式
+    QPixmap pix(32, 16);
     pix.fill(Qt::transparent);
-
     QPainter painter(&pix);
     painter.setRenderHint(QPainter::Antialiasing);
 
     if (style == Qt::NoPen) {
-        // 如果是无，画一个灰色的叉或者文字
         painter.setPen(Qt::gray);
         painter.drawText(pix.rect(), Qt::AlignCenter, "无");
     } else {
@@ -217,9 +249,8 @@ QIcon PlottingDialog1::createLineIcon(Qt::PenStyle style)
         pen.setStyle(style);
         pen.setWidth(2);
         painter.setPen(pen);
-        painter.drawLine(0, 8, 32, 8); // 绘制横线
+        painter.drawLine(0, 8, 32, 8);
     }
-
     return QIcon(pix);
 }
 
@@ -235,7 +266,6 @@ QString PlottingDialog1::getXLabel() const { return ui->combo_XCol->currentText(
 QString PlottingDialog1::getYLabel() const { return ui->combo_YCol->currentText(); }
 bool PlottingDialog1::isNewWindow() const { return ui->check_NewWindow->isChecked(); }
 
-// 直接从控件获取值
 QCPScatterStyle::ScatterShape PlottingDialog1::getPointShape() const {
     return (QCPScatterStyle::ScatterShape)ui->combo_PointShape->currentData().toInt();
 }

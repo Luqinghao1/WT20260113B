@@ -2,10 +2,10 @@
  * 文件名: plottingdialog2.h
  * 文件作用: 压力-产量双坐标曲线配置对话框头文件
  * 功能描述:
- * 1. 左侧配置压力数据（点线样式）。
- * 2. 右侧配置产量数据（阶梯/折线/散点切换，动态样式显隐）。
- * 3. 样式设置采用图标+中文预览。
- * 4. [新增] 补充“在新建窗口显示”的功能接口。
+ * 1. 左侧配置压力数据，右侧配置产量数据。
+ * 2. 样式设置采用图标+中文预览。
+ * 3. 默认名称为“压力产量分析+数字”。
+ * 4. “显示数据来源”功能，若压力和产量来自不同文件，则用 & 连接文件名，并加括号。
  */
 
 #ifndef PLOTTINGDIALOG2_H
@@ -37,7 +37,7 @@ public:
     QString getPressFileName() const;
     int getPressXCol() const;
     int getPressYCol() const;
-    QString getPressLegend() const; // 默认为Y列名
+    QString getPressLegend() const;
 
     // 压力样式
     QCPScatterStyle::ScatterShape getPressShape() const;
@@ -50,7 +50,7 @@ public:
     QString getProdFileName() const;
     int getProdXCol() const;
     int getProdYCol() const;
-    QString getProdLegend() const; // 默认为Y列名
+    QString getProdLegend() const;
 
     // 产量绘图类型: 0-阶梯图, 1-折线图, 2-散点图
     int getProdGraphType() const;
@@ -62,7 +62,7 @@ public:
     QColor getProdLineColor() const;
     int getProdLineWidth() const;
 
-    // [新增] 是否在新建窗口显示
+    // 是否在新建窗口显示
     bool isNewWindow() const;
 
 private slots:
@@ -73,20 +73,28 @@ private slots:
     // 产量绘图类型改变 (控制样式控件显隐)
     void onProdTypeChanged(int index);
 
+    // 显示数据来源复选框改变
+    void onShowSourceChanged(bool checked);
+
 private:
     Ui::PlottingDialog2 *ui;
     QMap<QString, QStandardItemModel*> m_dataMap;
     QStandardItemModel* m_pressModel;
     QStandardItemModel* m_prodModel;
 
-    static int s_chartCounter;
+    static int s_chartCounter; // 用于实现“数字自小到大自动排序”
+    QString m_lastSuffix;
 
     // --- 辅助函数 ---
     void populatePressColumns();
     void populateProdColumns();
 
-    void setupStyleUI(); // 初始化所有下拉框
+    void setupStyleUI();
     void initColorComboBox(QComboBox* combo);
+
+    // 更新曲线名称后缀
+    void updateNameSuffix();
+
     QIcon createPointIcon(QCPScatterStyle::ScatterShape shape);
     QIcon createLineIcon(Qt::PenStyle style);
 };

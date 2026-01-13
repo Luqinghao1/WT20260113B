@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>700</width>
-    <height>600</height>
+    <height>620</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -81,34 +81,41 @@ QRadioButton { color: #333333; spacing: 8px; }
       <item row="0" column="1">
        <widget class="QLineEdit" name="lineEdit_Name"/>
       </item>
-      <item row="1" column="0">
+      <item row="1" column="1">
+       <widget class="QCheckBox" name="check_ShowSource">
+        <property name="text">
+         <string>显示数据来源</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
        <widget class="QLabel" name="label_File">
         <property name="text">
          <string>数据文件:</string>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="2" column="1">
        <widget class="QComboBox" name="comboFileSelect"/>
       </item>
-      <item row="2" column="0">
+      <item row="3" column="0">
        <widget class="QLabel" name="label_Time">
         <property name="text">
          <string>时间数据:</string>
         </property>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="3" column="1">
        <widget class="QComboBox" name="comboTime"/>
       </item>
-      <item row="3" column="0">
+      <item row="4" column="0">
        <widget class="QLabel" name="label_Press">
         <property name="text">
          <string>压力数据:</string>
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
+      <item row="4" column="1">
        <widget class="QComboBox" name="comboPress"/>
       </item>
      </layout>
@@ -236,7 +243,8 @@ QRadioButton { color: #333333; spacing: 8px; }
         <item row="0" column="0" colspan="2">
          <widget class="QLabel" name="label_TitlePress">
           <property name="styleSheet">
-           <string notr="true">font-weight: bold; color: #0078d7;</string>
+           <string notr="true">font-weight: bold;
+color: #0078d7;</string>
           </property>
           <property name="text">
            <string>压差曲线样式</string>
@@ -317,7 +325,8 @@ QRadioButton { color: #333333; spacing: 8px; }
         <item row="0" column="0" colspan="2">
          <widget class="QLabel" name="label_TitleDeriv">
           <property name="styleSheet">
-           <string notr="true">font-weight: bold; color: #0078d7;</string>
+           <string notr="true">font-weight: bold;
+color: #0078d7;</string>
           </property>
           <property name="text">
            <string>导数曲线样式</string>
