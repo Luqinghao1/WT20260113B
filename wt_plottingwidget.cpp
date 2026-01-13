@@ -4,9 +4,9 @@
  * 功能描述:
  * 1. 管理试井分析曲线的创建、显示、修改和删除。
  * 2. 实现了 PlottingDialog1/2/3/4 的交互逻辑。
- * 3. [修复] 还原了阶梯图（产量）的正确绘制逻辑，并增加了数组判空检查，防止闪退。
- * 4. [修复] 在读取表格数据时增加了空指针检查，防止因空行导致的程序崩溃。
- * 5. [优化] 统一了交互弹窗（QMessageBox, Dialog）的按钮样式为灰底黑字。
+ * 3. [修复] 修复阶梯图在数据移动后，切换曲线导致状态丢失的问题（通过判断数据是否有序来决定是否累加）。
+ * 4. [修复] 开/关井线现在会在上下两个坐标系同时绘制，并能随产量数据横向移动而同步。
+ * 5. [优化] 统一对话框按钮样式。
  */
 
 #include "wt_plottingwidget.h"
@@ -400,9 +400,12 @@ void WT_PlottingWidget::addCurveToPlot(const CurveInfo& info, ChartWidget* widge
     plot->replot();
 }
 
-// 绘制双坐标曲线
+// 绘制双坐标曲线 (重点修改区域)
 void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widget) {
     if (!widget) widget = ui->customPlot;
+
+    // [新增] 绘制前先清除旧的事件线
+    widget->clearEventLines();
 
     QCPAxisRect* topRect = widget->getTopRect();
     QCPAxisRect* bottomRect = widget->getBottomRect();
@@ -423,25 +426,62 @@ void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widg
     QVector<double> px, py;
 
     if(info.prodGraphType == 0) { // 阶梯图
-        double t_cum = 0;
+        // [修复逻辑] 判断 info.x2Data 是“时间间隔(导入时的原始数据)”还是“绝对时间(移动后的数据)”
+        // 如果是时间间隔，通常包含很多相同的值（如试井测试中的等间隔记录）或者非严格递增
+        // 如果是绝对时间，必然是严格单调递增的
 
-        // [修复] 还原老版本的阶梯图计算逻辑，但增加了安全性检查防止闪退
-        if(!info.x2Data.isEmpty() && !info.y2Data.isEmpty()) {
-            px.append(0);
-            py.append(info.y2Data[0]);
+        bool isAbsoluteTime = true;
+        if (info.x2Data.size() > 1) {
+            for (int i = 0; i < info.x2Data.size() - 1; ++i) {
+                if (info.x2Data[i+1] <= info.x2Data[i]) {
+                    isAbsoluteTime = false;
+                    break;
+                }
+            }
+        } else {
+            isAbsoluteTime = false; // 只有一个点或空，默认当间隔处理（虽然无所谓）
         }
 
-        for(int i=0; i<info.x2Data.size(); ++i) {
-            t_cum += info.x2Data[i];
-
-            // 安全检查防止越界访问
-            if(i+1 < info.y2Data.size()) {
-                px.append(t_cum);
-                py.append(info.y2Data[i+1]);
+        if (isAbsoluteTime && !info.x2Data.isEmpty()) {
+            // 已经是绝对时间（例如经过了移动操作），直接使用
+            px = info.x2Data;
+            py = info.y2Data;
+        } else {
+            // 是原始的时间间隔数据，执行累加逻辑
+            double t_cum = 0;
+            if(!info.x2Data.isEmpty() && !info.y2Data.isEmpty()) {
+                px.append(0);
+                py.append(info.y2Data[0]);
             }
-            else if (i < info.y2Data.size()) {
-                px.append(t_cum);
-                py.append(info.y2Data[i]);
+            for(int i=0; i<info.x2Data.size(); ++i) {
+                t_cum += info.x2Data[i];
+                if(i+1 < info.y2Data.size()) {
+                    px.append(t_cum);
+                    py.append(info.y2Data[i+1]);
+                }
+                else if (i < info.y2Data.size()) {
+                    px.append(t_cum);
+                    py.append(info.y2Data[i]);
+                }
+            }
+        }
+
+        // [新增] 自动检测开/关井并绘制事件线
+        // px 和 py 现在都是绝对坐标，可以直接判断
+        if (px.size() == py.size() && px.size() > 1) {
+            for (int i = 0; i < px.size() - 1; ++i) {
+                double valCurrent = py[i];
+                double valNext = py[i+1];
+                double timeNext = px[i+1];
+
+                // 关井: 从 >0 变为 <= 1e-9 (考虑浮点误差)
+                if (valCurrent > 1e-9 && valNext <= 1e-9) {
+                    widget->addEventLine(timeNext, 0); // 0 = 红色关井线
+                }
+                // 开井: 从 <= 1e-9 变为 > 1e-9
+                else if (valCurrent <= 1e-9 && valNext > 1e-9) {
+                    widget->addEventLine(timeNext, 1); // 1 = 绿色开井线
+                }
             }
         }
 
@@ -503,24 +543,32 @@ void WT_PlottingWidget::drawDerivativePlot(const CurveInfo& info, ChartWidget* w
     plot->replot();
 }
 
+// [修复] 处理数据移动后的保存逻辑
 void WT_PlottingWidget::onGraphDataModified(QCPGraph* graph) {
     if (!graph || m_currentDisplayedCurve.isEmpty()) return;
     if (!m_curves.contains(m_currentDisplayedCurve)) return;
 
     CurveInfo& info = m_curves[m_currentDisplayedCurve];
 
-    if (info.type == 1) {
+    if (info.type == 1) { // 压力产量图
         QVector<double> newX, newY;
         auto dataPtr = graph->data();
+
+        // 提取图形数据（绝对坐标）
         for (auto it = dataPtr->begin(); it != dataPtr->end(); ++it) {
             newX.append(it->key);
             newY.append(it->value);
         }
 
         if (graph == m_graphPress) {
+            // 压力曲线
             info.xData = newX;
             info.yData = newY;
-        } else if (graph == m_graphProd) {
+        }
+        else if (graph == m_graphProd) {
+            // 产量曲线
+            // [关键修复] 无论是否为阶梯图，移动后的数据都是绝对时间坐标
+            // 我们直接保存绝对坐标。drawStackedPlot 会检测到它是单调递增的，从而不再进行二次累加
             info.x2Data = newX;
             info.y2Data = newY;
         }
@@ -1059,4 +1107,3 @@ double WT_PlottingWidget::getProductionValueFromGraph(double t, QCPGraph* graph)
 
 double WT_PlottingWidget::getProductionValueAt(double t, const CurveInfo& info) { Q_UNUSED(t); return info.y2Data.isEmpty() ? 0 : info.y2Data.last(); }
 QListWidgetItem* WT_PlottingWidget::getCurrentSelectedItem() { return ui->listWidget_Curves->currentItem(); }
-
