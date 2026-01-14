@@ -3,7 +3,9 @@
  * 文件作用: 图表分析主界面头文件
  * 功能描述:
  * 1. 管理试井分析曲线的创建、显示、修改和删除。
- * 2. CurveInfo 结构体增加 sourceFileName2 字段，支持双文件数据源（压力+产量）。
+ * 2. CurveInfo 结构体支持双文件数据源（压力+产量）。
+ * 3. 增加了视图状态保存功能，切换曲线时可保持上次的缩放和平移视图。
+ * 4. [本次修改] 优化导出功能，支持中文表头，修正产量读取，增加导出后跳转文件的信号。
  */
 
 #ifndef WT_PLOTTINGWIDGET_H
@@ -91,6 +93,10 @@ public:
     // 更新图表标题
     void updateChartTitle(const QString& title);
 
+signals:
+    // [新增] 信号：请求在数据界面打开导出的文件
+    void viewExportedFile(const QString& filePath);
+
 private slots:
     void on_btn_NewCurve_clicked();
     void on_btn_PressureRate_clicked();
@@ -138,6 +144,27 @@ private:
     QCPGraph* m_graphPress;
     QCPGraph* m_graphProd;
 
+    // [新增] 视图状态结构体，用于保存缩放和平移位置
+    struct ViewState {
+        bool saved = false; // 是否已保存
+        // 单图模式 / 导数模式使用的坐标轴范围
+        QCPRange xRange;
+        QCPRange yRange;
+
+        // 叠加模式 (Stacked) 使用的坐标轴范围
+        QCPRange topXRange;
+        QCPRange topYRange;
+        QCPRange bottomXRange;
+        QCPRange bottomYRange;
+    };
+
+    // [新增] 存储每条曲线的视图状态
+    QMap<QString, ViewState> m_viewStates;
+
+    // [新增] 保存和恢复视图状态的辅助函数
+    void saveCurveViewState(const QString& name);
+    void restoreCurveViewState(const QString& name);
+
     // [新增] 通用绘图入口：在指定组件上显示曲线
     void displayCurve(const CurveInfo& info, ChartWidget* widget);
 
@@ -147,6 +174,8 @@ private:
     void drawDerivativePlot(const CurveInfo& info, ChartWidget* widget);
 
     void executeExport(bool fullRange, double start = 0, double end = 0);
+
+    // [修改] 产量读取函数优化
     double getProductionValueFromGraph(double t, QCPGraph* graph);
     double getProductionValueAt(double t, const CurveInfo& info);
 

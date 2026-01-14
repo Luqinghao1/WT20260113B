@@ -4,9 +4,10 @@
  * 功能描述:
  * 1. 管理试井分析曲线的创建、显示、修改和删除。
  * 2. 实现了 PlottingDialog1/2/3/4 的交互逻辑。
- * 3. [修复] 修复阶梯图在数据移动后，切换曲线导致状态丢失的问题（通过判断数据是否有序来决定是否累加）。
- * 4. [修复] 开/关井线现在会在上下两个坐标系同时绘制，并能随产量数据横向移动而同步。
- * 5. [优化] 统一对话框按钮样式。
+ * 3. 实现了视图状态保存与恢复。
+ * 4. [本次修改]
+ * - 修复导出 CSV 时中文表头乱码的问题（添加 UTF-8 BOM）。
+ * - 导出后发出的 viewExportedFile 信号将在 MainWindow 中处理跳转逻辑。
  */
 
 #include "wt_plottingwidget.h"
@@ -20,6 +21,7 @@
 #include "chartsetting1.h"
 #include "pressurederivativecalculator.h"
 #include "pressurederivativecalculator1.h"
+#include "xlsxdocument.h" //  QtXlsx 库
 
 #include <QMessageBox>
 #include <QFileDialog>
@@ -31,6 +33,7 @@
 #include <QtMath>
 #include <QDebug>
 #include <QSplitter>
+#include <QStringConverter> // Qt6 编码支持
 
 // ============================================================================
 // 辅助函数与 CurveInfo 实现
@@ -208,6 +211,12 @@ void WT_PlottingWidget::onChartTitleChanged(const QString& newTitle)
     info.name = newTitle;
     m_curves.insert(newTitle, info);
 
+    // 同步更新视图状态Map的Key
+    if (m_viewStates.contains(m_currentDisplayedCurve)) {
+        ViewState state = m_viewStates.take(m_currentDisplayedCurve);
+        m_viewStates.insert(newTitle, state);
+    }
+
     // 更新 ListWidget
     QListWidgetItem* item = getCurrentSelectedItem();
     if (item && item->text() == m_currentDisplayedCurve) {
@@ -230,7 +239,6 @@ void WT_PlottingWidget::onChartGraphsChanged()
     CurveInfo& info = m_curves[m_currentDisplayedCurve];
     QCustomPlot* plot = ui->customPlot->getPlot();
 
-    // 根据当前的绘图模式，从 plot 中反向读取图例名称
     if (info.type == 1) { // Stacked: Pressure + Prod
         if (m_graphPress) info.legendName = m_graphPress->name();
         if (m_graphProd) info.prodLegendName = m_graphProd->name();
@@ -264,7 +272,7 @@ void WT_PlottingWidget::updateChartTitle(const QString& title) {
     }
 }
 
-// [关键修改] 优化对话框样式，显式设置按钮为灰底黑字，防止继承白底
+// [关键修改] 优化对话框样式，显式设置按钮为灰底黑字
 void WT_PlottingWidget::applyDialogStyle(QWidget* dialog) {
     if(!dialog) return;
     QString qss = "QWidget { color: black; background-color: white; font-family: 'Microsoft YaHei'; }"
@@ -283,6 +291,7 @@ void WT_PlottingWidget::applyDialogStyle(QWidget* dialog) {
 
 void WT_PlottingWidget::loadProjectData() {
     m_curves.clear();
+    m_viewStates.clear();
     ui->listWidget_Curves->clear();
     ui->customPlot->clearGraphs();
     m_currentDisplayedCurve.clear();
@@ -315,6 +324,7 @@ void WT_PlottingWidget::on_btn_Save_clicked() { saveProjectData(); }
 
 void WT_PlottingWidget::clearAllPlots() {
     m_curves.clear();
+    m_viewStates.clear();
     m_currentDisplayedCurve.clear();
     ui->listWidget_Curves->clear();
     ui->customPlot->clearGraphs();
@@ -323,10 +333,68 @@ void WT_PlottingWidget::clearAllPlots() {
     m_openedWindows.clear();
 }
 
+// 保存曲线视图状态
+void WT_PlottingWidget::saveCurveViewState(const QString& name) {
+    if (name.isEmpty()) return;
+
+    ViewState state;
+    state.saved = true;
+
+    ChartWidget* widget = ui->customPlot;
+    MouseZoom* plot = widget->getPlot();
+
+    if (widget->getChartMode() == ChartWidget::Mode_Stacked) {
+        if (widget->getTopRect()) {
+            state.topXRange = widget->getTopRect()->axis(QCPAxis::atBottom)->range();
+            state.topYRange = widget->getTopRect()->axis(QCPAxis::atLeft)->range();
+        }
+        if (widget->getBottomRect()) {
+            state.bottomXRange = widget->getBottomRect()->axis(QCPAxis::atBottom)->range();
+            state.bottomYRange = widget->getBottomRect()->axis(QCPAxis::atLeft)->range();
+        }
+    } else {
+        state.xRange = plot->xAxis->range();
+        state.yRange = plot->yAxis->range();
+    }
+
+    m_viewStates[name] = state;
+}
+
+// 恢复曲线视图状态
+void WT_PlottingWidget::restoreCurveViewState(const QString& name) {
+    if (!m_viewStates.contains(name)) return;
+
+    ViewState state = m_viewStates[name];
+    if (!state.saved) return;
+
+    ChartWidget* widget = ui->customPlot;
+    MouseZoom* plot = widget->getPlot();
+
+    if (widget->getChartMode() == ChartWidget::Mode_Stacked) {
+        if (widget->getTopRect()) {
+            widget->getTopRect()->axis(QCPAxis::atBottom)->setRange(state.topXRange);
+            widget->getTopRect()->axis(QCPAxis::atLeft)->setRange(state.topYRange);
+        }
+        if (widget->getBottomRect()) {
+            widget->getBottomRect()->axis(QCPAxis::atBottom)->setRange(state.bottomXRange);
+            widget->getBottomRect()->axis(QCPAxis::atLeft)->setRange(state.bottomYRange);
+        }
+    } else {
+        plot->xAxis->setRange(state.xRange);
+        plot->yAxis->setRange(state.yRange);
+    }
+
+    plot->replot();
+}
+
 // 列表双击：在主界面显示曲线
 void WT_PlottingWidget::on_listWidget_Curves_itemDoubleClicked(QListWidgetItem *item) {
     QString name = item->text();
     if(!m_curves.contains(name)) return;
+
+    if (!m_currentDisplayedCurve.isEmpty()) {
+        saveCurveViewState(m_currentDisplayedCurve);
+    }
 
     CurveInfo info = m_curves[name];
     m_currentDisplayedCurve = name;
@@ -334,8 +402,8 @@ void WT_PlottingWidget::on_listWidget_Curves_itemDoubleClicked(QListWidgetItem *
     m_graphPress = nullptr;
     m_graphProd = nullptr;
 
-    // 使用通用显示函数，目标为 ui->customPlot
     displayCurve(info, ui->customPlot);
+    restoreCurveViewState(name);
 }
 
 // 通用绘图入口函数
@@ -384,7 +452,6 @@ void WT_PlottingWidget::displayCurve(const CurveInfo& info, ChartWidget* widget)
     }
 }
 
-// 绘制简单曲线
 void WT_PlottingWidget::addCurveToPlot(const CurveInfo& info, ChartWidget* widget) {
     if (!widget) widget = ui->customPlot;
     MouseZoom* plot = widget->getPlot();
@@ -400,11 +467,9 @@ void WT_PlottingWidget::addCurveToPlot(const CurveInfo& info, ChartWidget* widge
     plot->replot();
 }
 
-// 绘制双坐标曲线 (重点修改区域)
 void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widget) {
     if (!widget) widget = ui->customPlot;
 
-    // [新增] 绘制前先清除旧的事件线
     widget->clearEventLines();
 
     QCPAxisRect* topRect = widget->getTopRect();
@@ -426,10 +491,6 @@ void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widg
     QVector<double> px, py;
 
     if(info.prodGraphType == 0) { // 阶梯图
-        // [修复逻辑] 判断 info.x2Data 是“时间间隔(导入时的原始数据)”还是“绝对时间(移动后的数据)”
-        // 如果是时间间隔，通常包含很多相同的值（如试井测试中的等间隔记录）或者非严格递增
-        // 如果是绝对时间，必然是严格单调递增的
-
         bool isAbsoluteTime = true;
         if (info.x2Data.size() > 1) {
             for (int i = 0; i < info.x2Data.size() - 1; ++i) {
@@ -439,15 +500,13 @@ void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widg
                 }
             }
         } else {
-            isAbsoluteTime = false; // 只有一个点或空，默认当间隔处理（虽然无所谓）
+            isAbsoluteTime = false;
         }
 
         if (isAbsoluteTime && !info.x2Data.isEmpty()) {
-            // 已经是绝对时间（例如经过了移动操作），直接使用
             px = info.x2Data;
             py = info.y2Data;
         } else {
-            // 是原始的时间间隔数据，执行累加逻辑
             double t_cum = 0;
             if(!info.x2Data.isEmpty() && !info.y2Data.isEmpty()) {
                 px.append(0);
@@ -466,21 +525,17 @@ void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widg
             }
         }
 
-        // [新增] 自动检测开/关井并绘制事件线
-        // px 和 py 现在都是绝对坐标，可以直接判断
         if (px.size() == py.size() && px.size() > 1) {
             for (int i = 0; i < px.size() - 1; ++i) {
                 double valCurrent = py[i];
                 double valNext = py[i+1];
                 double timeNext = px[i+1];
 
-                // 关井: 从 >0 变为 <= 1e-9 (考虑浮点误差)
                 if (valCurrent > 1e-9 && valNext <= 1e-9) {
-                    widget->addEventLine(timeNext, 0); // 0 = 红色关井线
+                    widget->addEventLine(timeNext, 0);
                 }
-                // 开井: 从 <= 1e-9 变为 > 1e-9
                 else if (valCurrent <= 1e-9 && valNext > 1e-9) {
-                    widget->addEventLine(timeNext, 1); // 1 = 绿色开井线
+                    widget->addEventLine(timeNext, 1);
                 }
             }
         }
@@ -513,14 +568,12 @@ void WT_PlottingWidget::drawStackedPlot(const CurveInfo& info, ChartWidget* widg
     gProd->rescaleAxes();
     plot->replot();
 
-    // 仅当在主界面绘图时，更新成员变量以支持交互
     if (widget == ui->customPlot) {
         m_graphPress = gPress;
         m_graphProd = gProd;
     }
 }
 
-// 绘制导数曲线
 void WT_PlottingWidget::drawDerivativePlot(const CurveInfo& info, ChartWidget* widget) {
     if (!widget) widget = ui->customPlot;
     MouseZoom* plot = widget->getPlot();
@@ -543,7 +596,6 @@ void WT_PlottingWidget::drawDerivativePlot(const CurveInfo& info, ChartWidget* w
     plot->replot();
 }
 
-// [修复] 处理数据移动后的保存逻辑
 void WT_PlottingWidget::onGraphDataModified(QCPGraph* graph) {
     if (!graph || m_currentDisplayedCurve.isEmpty()) return;
     if (!m_curves.contains(m_currentDisplayedCurve)) return;
@@ -553,22 +605,16 @@ void WT_PlottingWidget::onGraphDataModified(QCPGraph* graph) {
     if (info.type == 1) { // 压力产量图
         QVector<double> newX, newY;
         auto dataPtr = graph->data();
-
-        // 提取图形数据（绝对坐标）
         for (auto it = dataPtr->begin(); it != dataPtr->end(); ++it) {
             newX.append(it->key);
             newY.append(it->value);
         }
 
         if (graph == m_graphPress) {
-            // 压力曲线
             info.xData = newX;
             info.yData = newY;
         }
         else if (graph == m_graphProd) {
-            // 产量曲线
-            // [关键修复] 无论是否为阶梯图，移动后的数据都是绝对时间坐标
-            // 我们直接保存绝对坐标。drawStackedPlot 会检测到它是单调递增的，从而不再进行二次累加
             info.x2Data = newX;
             info.y2Data = newY;
         }
@@ -576,7 +622,7 @@ void WT_PlottingWidget::onGraphDataModified(QCPGraph* graph) {
 }
 
 // -----------------------------------------------------------------------------
-// on_btn_Manage_clicked 修改曲线逻辑 (已强化安全性)
+// on_btn_Manage_clicked 修改曲线逻辑
 // -----------------------------------------------------------------------------
 void WT_PlottingWidget::on_btn_Manage_clicked() {
     QListWidgetItem* item = getCurrentSelectedItem();
@@ -585,7 +631,6 @@ void WT_PlottingWidget::on_btn_Manage_clicked() {
     if (!m_curves.contains(name)) return;
     CurveInfo& info = m_curves[name];
 
-    // 准备数据包
     DialogCurveInfo dlgInfo;
     dlgInfo.type = info.type;
     dlgInfo.name = info.name;
@@ -631,6 +676,8 @@ void WT_PlottingWidget::on_btn_Manage_clicked() {
         bool nameChanged = (info.name != result.name);
         if (nameChanged) {
             m_curves.remove(name);
+            m_viewStates.remove(name);
+
             info.name = result.name;
             item->setText(info.name);
             name = info.name;
@@ -748,9 +795,9 @@ void WT_PlottingWidget::on_btn_Manage_clicked() {
             currentInfo.derivData = derData;
         }
 
-        // 仅当当前主界面显示的是该曲线时，才刷新主界面
         if(m_currentDisplayedCurve == currentInfo.name) {
             displayCurve(currentInfo, ui->customPlot);
+            m_viewStates.remove(currentInfo.name);
         }
     }
 }
@@ -765,7 +812,6 @@ void WT_PlottingWidget::on_btn_NewCurve_clicked() {
     if(dlg.exec() == QDialog::Accepted) {
         CurveInfo info;
         info.name = dlg.getCurveName();
-        // [默认图例] 通用曲线默认为Y轴列名
         info.legendName = dlg.getLegendName();
 
         info.sourceFileName = dlg.getSelectedFileName();
@@ -798,7 +844,6 @@ void WT_PlottingWidget::on_btn_NewCurve_clicked() {
         m_curves.insert(info.name, info);
         ui->listWidget_Curves->addItem(info.name);
 
-        // 处理新建窗口逻辑
         if (dlg.isNewWindow()) {
             ChartWindow* cw = new ChartWindow(nullptr);
             cw->setAttribute(Qt::WA_DeleteOnClose);
@@ -824,7 +869,6 @@ void WT_PlottingWidget::on_btn_PressureRate_clicked() {
     if(dlg.exec() == QDialog::Accepted) {
         CurveInfo info;
         info.name = dlg.getChartName();
-        // [默认图例] 强制为“压力”
         info.legendName = "压力";
         info.type = 1;
 
@@ -866,7 +910,6 @@ void WT_PlottingWidget::on_btn_PressureRate_clicked() {
         info.lineColor = dlg.getPressLineColor();
         info.lineWidth = dlg.getPressLineWidth();
 
-        // [默认图例] 强制为“产量”
         info.prodLegendName = "产量";
 
         info.prodGraphType = dlg.getProdGraphType();
@@ -903,7 +946,6 @@ void WT_PlottingWidget::on_btn_Derivative_clicked() {
     if(dlg.exec() == QDialog::Accepted) {
         CurveInfo info;
         info.name = dlg.getCurveName();
-        // [默认图例] 强制为“压差”
         info.legendName = "压差";
         info.type = 2;
 
@@ -918,7 +960,6 @@ void WT_PlottingWidget::on_btn_Derivative_clicked() {
         if (m_dataMap.contains(info.sourceFileName)) {
             QStandardItemModel* model = m_dataMap.value(info.sourceFileName);
 
-            // 安全读取第一行数据
             double p_shutin = 0;
             if (model->rowCount() > 0) {
                 QStandardItem* item0 = model->item(0, info.yCol);
@@ -955,7 +996,6 @@ void WT_PlottingWidget::on_btn_Derivative_clicked() {
         info.derivLineColor = dlg.getDerivLineColor();
         info.derivLineWidth = dlg.getDerivLineWidth();
 
-        // [默认图例] 强制为“压力导数”
         info.prodLegendName = "压力导数";
 
         m_curves.insert(info.name, info);
@@ -979,12 +1019,13 @@ void WT_PlottingWidget::on_btn_Delete_clicked() {
     QString name = item->text();
     if(QMessageBox::question(this, "确认删除", "确定要删除曲线 \"" + name + "\" 吗？") == QMessageBox::Yes) {
         m_curves.remove(name); delete item;
+        m_viewStates.remove(name);
         if(m_currentDisplayedCurve == name) { ui->customPlot->clearGraphs(); m_currentDisplayedCurve.clear(); }
     }
 }
 
 // -----------------------------------------------------------------------------
-// [修改] 优化导出功能的交互体验（提示框样式）
+// [修改] 优化导出功能的交互体验
 // -----------------------------------------------------------------------------
 void WT_PlottingWidget::onExportDataTriggered() {
     if(m_currentDisplayedCurve.isEmpty()) {
@@ -1031,65 +1072,206 @@ void WT_PlottingWidget::onGraphClicked(QCPAbstractPlottable *plottable, int data
     }
 }
 
+// 导出数据：使用 QtXlsx 导出真正的 Excel 文件，支持不同曲线的列定义
 void WT_PlottingWidget::executeExport(bool fullRange, double start, double end) {
-    QString dir = ModelParameter::instance()->getProjectPath();
-    if (dir.isEmpty()) dir = QDir::currentPath();
-    QString name = dir + "/export.csv";
-    QString file = QFileDialog::getSaveFileName(this, "保存", name, "CSV Files (*.csv);;Excel Files (*.xls);;Text Files (*.txt)");
-    if(file.isEmpty()) return;
-    QFile f(file);
-    if(!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
-    QTextStream out(&f);
-    QString sep = ",";
-    if(file.endsWith(".txt") || file.endsWith(".xls")) sep = "\t";
-
+    if (m_currentDisplayedCurve.isEmpty() || !m_curves.contains(m_currentDisplayedCurve)) return;
     CurveInfo& info = m_curves[m_currentDisplayedCurve];
 
-    if(ui->customPlot->getChartMode() == ChartWidget::Mode_Stacked) {
-        if (!m_graphPress || !m_graphProd) return;
+    // 1. 获取保存路径
+    QString dir = ModelParameter::instance()->getProjectPath();
+    if (dir.isEmpty()) dir = QDir::currentPath();
 
-        out << (fullRange ? "Time,P,Q\n" : "AdjTime,P,Q,OrigTime\n");
+    // 默认为 xlsx
+    QString defaultName = dir + "/" + info.name + ".xlsx";
+    // 不再提供 .xls 选项
+    QString filter = "Excel Files (*.xlsx);;CSV Files (*.csv);;Text Files (*.txt)";
+    QString file = QFileDialog::getSaveFileName(this, "导出数据", defaultName, filter);
+    if(file.isEmpty()) return;
 
-        auto dataPtr = m_graphPress->data();
-        for (auto it = dataPtr->begin(); it != dataPtr->end(); ++it) {
-            double t = it->key;
-            if(!fullRange && (t < start || t > end)) continue;
+    // 2. 准备数据容器
+    QStringList headers;
+    QVector<QStringList> dataRows;
 
-            double p = it->value;
-            double q = getProductionValueFromGraph(t, m_graphProd);
+    // 获取通用曲线的轴标签
+    QString xLabel = "X轴";
+    QString yLabel = "Y轴";
+    if (ui->customPlot->getPlot()->xAxis) xLabel = ui->customPlot->getPlot()->xAxis->label();
+    if (ui->customPlot->getPlot()->yAxis) yLabel = ui->customPlot->getPlot()->yAxis->label();
+    if (xLabel.isEmpty()) xLabel = "X数据";
+    if (yLabel.isEmpty()) yLabel = "Y数据";
 
-            if(fullRange) out << t << sep << p << sep << q << "\n";
-            else out << (t-start) << sep << p << sep << q << sep << t << "\n";
-        }
-    } else {
-        QCPGraph* graph = ui->customPlot->getPlot()->graphCount() > 0 ? ui->customPlot->getPlot()->graph(0) : nullptr;
-        if (graph) {
-            out << (fullRange ? "Time,Value\n" : "AdjTime,Value,OrigTime\n");
-            auto dataPtr = graph->data();
-            for (auto it = dataPtr->begin(); it != dataPtr->end(); ++it) {
-                double t = it->key;
-                if(!fullRange && (t < start || t > end)) continue;
-                double val = it->value;
-                if(fullRange) out << t << sep << val << "\n";
-                else out << (t-start) << sep << val << sep << t << "\n";
-            }
+    // =========================================================
+    // 数据组装逻辑
+    // =========================================================
+
+    // --- Type 0: 通用曲线 ---
+    if (info.type == 0) {
+        if (fullRange) {
+            // 全量: X轴名, Y轴名
+            headers << xLabel << yLabel;
         } else {
-            out << (fullRange ? "Time,Value\n" : "AdjTime,Value,OrigTime\n");
-            for(int i=0; i<info.xData.size(); ++i) {
-                double t = info.xData[i];
-                if(!fullRange && (t < start || t > end)) continue;
-                double val = info.yData[i];
-                if(fullRange) out << t << sep << val << "\n";
-                else out << (t-start) << sep << val << sep << t << "\n";
+            // 部分: X轴名, Y轴名, 原始+X轴名
+            headers << xLabel << yLabel << ("原始" + xLabel);
+        }
+
+        for (int i = 0; i < info.xData.size(); ++i) {
+            double t = info.xData[i];
+            if (!fullRange && (t < start || t > end)) continue;
+
+            QStringList row;
+            double val = info.yData[i];
+
+            if (fullRange) {
+                row << QString::number(t) << QString::number(val);
+            } else {
+                row << QString::number(t - start) << QString::number(val) << QString::number(t);
             }
+            dataRows.append(row);
         }
     }
-    f.close();
-    QMessageBox::information(this, "成功", "导出完成。");
+    // --- Type 1: 压力产量分析 ---
+    else if (info.type == 1) {
+        // 始终保持: 时间, 压力, 产量, 原始时间
+        headers << "时间" << "压力" << "产量" << "原始时间";
+
+        for (int i = 0; i < info.xData.size(); ++i) {
+            double t = info.xData[i];
+            if (!fullRange && (t < start || t > end)) continue;
+
+            double p = info.yData[i];
+            double q = 0.0;
+            // 获取产量值
+            if (m_graphProd) {
+                q = getProductionValueFromGraph(t, m_graphProd);
+            } else if (i < info.y2Data.size()) {
+                q = info.y2Data[i];
+            }
+
+            QStringList row;
+            double timeExport = fullRange ? t : (t - start);
+
+            row << QString::number(timeExport)
+                << QString::number(p)
+                << QString::number(q)
+                << QString::number(t);
+            dataRows.append(row);
+        }
+    }
+    // --- Type 2: 压力导数分析 ---
+    else if (info.type == 2) {
+        if (fullRange) {
+            // 全量: 时间, 压差, 压力导数
+            headers << "时间" << "压差" << "压力导数";
+        } else {
+            // 部分: 时间, 压差, 原始时间
+            headers << "时间" << "压差" << "原始时间";
+        }
+
+        for (int i = 0; i < info.xData.size(); ++i) {
+            double t = info.xData[i];
+            if (!fullRange && (t < start || t > end)) continue;
+
+            double dp = info.yData[i];
+
+            QStringList row;
+            if (fullRange) {
+                double deriv = (i < info.derivData.size()) ? info.derivData[i] : 0.0;
+                row << QString::number(t) << QString::number(dp) << QString::number(deriv);
+            } else {
+                // 部分导出不包含导数值
+                row << QString::number(t - start) << QString::number(dp) << QString::number(t);
+            }
+            dataRows.append(row);
+        }
+    }
+
+    // =========================================================
+    // 文件写入逻辑
+    // =========================================================
+
+    bool isXlsx = file.endsWith(".xlsx", Qt::CaseInsensitive);
+
+    if (isXlsx) {
+        // 使用 QtXlsx 库写入
+        QXlsx::Document xlsx;
+
+        // 1. 写表头 (第一行)
+        for (int col = 0; col < headers.size(); ++col) {
+            // QtXlsx 行列从 1 开始
+            xlsx.write(1, col + 1, headers[col]);
+        }
+
+        // 2. 写数据
+        for (int row = 0; row < dataRows.size(); ++row) {
+            QStringList& lineData = dataRows[row];
+            for (int col = 0; col < lineData.size(); ++col) {
+                // 尝试转为 double 写入以保持数字格式，否则存为文本
+                bool ok;
+                double val = lineData[col].toDouble(&ok);
+                if (ok) {
+                    xlsx.write(row + 2, col + 1, val);
+                } else {
+                    xlsx.write(row + 2, col + 1, lineData[col]);
+                }
+            }
+        }
+
+        if (xlsx.saveAs(file)) {
+            // Success
+        } else {
+            QMessageBox::warning(this, "错误", "保存 xlsx 文件失败，请检查文件是否被占用。");
+            return;
+        }
+
+    } else {
+        // CSV 或 TXT (保持 UTF-8 BOM)
+        QFile f(file);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, "错误", "无法打开文件进行写入。");
+            return;
+        }
+
+        QTextStream out(&f);
+        out.setGenerateByteOrderMark(true);
+        out.setEncoding(QStringConverter::Utf8);
+
+        QString sep = file.endsWith(".csv", Qt::CaseInsensitive) ? "," : "\t";
+
+        // 写表头
+        out << headers.join(sep) << "\n";
+
+        // 写数据
+        for (const QStringList& row : dataRows) {
+            out << row.join(sep) << "\n";
+        }
+        f.close();
+    }
+
+    // 4. 导出后交互
+    QMessageBox openMsg(this);
+    openMsg.setWindowTitle("导出成功");
+    openMsg.setText("数据导出完成。\n路径: " + file + "\n\n是否在数据界面打开导出的文件？");
+    openMsg.setIcon(QMessageBox::Question);
+    QPushButton* btnYes = openMsg.addButton("打开文件", QMessageBox::ActionRole);
+    openMsg.addButton("关闭", QMessageBox::RejectRole);
+    applyDialogStyle(&openMsg);
+    openMsg.exec();
+
+    if (openMsg.clickedButton() == btnYes) {
+        emit viewExportedFile(file);
+    }
 }
 
 double WT_PlottingWidget::getProductionValueFromGraph(double t, QCPGraph* graph) {
     if (!graph) return 0.0;
+
+    if (graph->lineStyle() == QCPGraph::lsStepLeft) {
+        auto data = graph->data();
+        auto it = data->findBegin(t);
+        if (it == data->end()) return 0.0;
+        return it->value;
+    }
+
     auto data = graph->data();
     auto it = data->findBegin(t);
     if (it == data->end()) return 0.0;
