@@ -5,8 +5,7 @@
  * 1. 负责应用程序的整体初始化和页面布局。
  * 2. 实现了左侧导航栏的逻辑控制和页面切换。
  * 3. 协调数据在不同模块之间的流转。
- * 4. [修正] 移除了切换到拟合页面时的自动数据传输，确保拟合数据仅由用户手动加载。
- * 5. [优化] transferDataToFitting 内部实现改为调用 PressureDerivativeCalculator，以备不时之需。
+ * 4. [新增] 实现了 onViewExportedFile 槽函数，在导出后自动切换到数据页并弹出配置对话框。
  */
 
 #include "mainwindow.h"
@@ -19,7 +18,6 @@
 #include "wt_plottingwidget.h"
 #include "fittingpage.h"
 #include "settingswidget.h"
-// 引入计算器头文件，用于优化 calculate 逻辑（虽然不自动调用，但保持代码整洁）
 #include "pressurederivativecalculator.h"
 
 #include <QDateTime>
@@ -122,16 +120,8 @@ void MainWindow::init()
                     // 切换堆叠窗口页面
                     ui->stackedWidget->setCurrentIndex(targetIndex);
 
-                    // [逻辑修正]
-                    // 切换到图表页 (Plotting) 时，通常需要自动刷新显示，这保持不变。
                     if (name == tr("图表")) {
                         onTransferDataToPlotting();
-                    }
-                    // [逻辑修正]
-                    // 切换到拟合页 (Fitting) 时，**不要** 自动调用 transferDataToFitting()。
-                    // 拟合界面应保持空白，直到用户在拟合界面点击“加载观测数据”。
-                    else if (name == tr("拟合")) {
-                        // Do nothing automatically
                     }
                 });
     }
@@ -161,6 +151,8 @@ void MainWindow::init()
 
     m_PlottingWidget = new WT_PlottingWidget(ui->pageData);
     ui->verticalLayout_2->addWidget(m_PlottingWidget);
+    // [新增] 连接导出的文件查看信号
+    connect(m_PlottingWidget, &WT_PlottingWidget::viewExportedFile, this, &MainWindow::onViewExportedFile);
 
     m_ModelManager = new ModelManager(this);
     m_ModelManager->initializeModels(ui->pageParamter);
@@ -203,7 +195,6 @@ void MainWindow::onProjectOpened(bool isNew)
 
     if (m_DataEditorWidget) {
         if (!isNew) m_DataEditorWidget->loadFromProjectData();
-        // 传递数据模型指针给拟合页面，供其内部对话框使用
         if (m_FittingPage) m_FittingPage->setProjectDataModels(m_DataEditorWidget->getAllDataModels());
     }
 
@@ -277,13 +268,32 @@ void MainWindow::onFileLoaded(const QString& filePath, const QString& fileType)
         m_DataEditorWidget->loadData(filePath, fileType);
     }
 
-    // 仅更新数据源列表，不推送具体数据
     if (m_FittingPage && m_DataEditorWidget) {
         m_FittingPage->setProjectDataModels(m_DataEditorWidget->getAllDataModels());
     }
 
     m_hasValidData = true;
     QTimer::singleShot(1000, this, &MainWindow::onDataReadyForPlotting);
+}
+
+// [新增] 处理导出的文件查看
+void MainWindow::onViewExportedFile(const QString& filePath)
+{
+    // 1. 切换到数据界面
+    ui->stackedWidget->setCurrentIndex(1);
+
+    // 2. 更新导航栏样式
+    QMap<QString,NavBtn*>::Iterator item = m_NavBtnMap.begin();
+    while (item != m_NavBtnMap.end()) {
+        ((NavBtn*)(item.value()))->setNormalStyle();
+        if(item.key() == tr("数据")) ((NavBtn*)(item.value()))->setClickedStyle();
+        item++;
+    }
+
+    // 3. 调用数据编辑器的加载接口，这会自动弹出数据导入配置对话框
+    if (m_DataEditorWidget) {
+        m_DataEditorWidget->loadData(filePath, "auto");
+    }
 }
 
 void MainWindow::onPlotAnalysisCompleted(const QString &analysisType, const QMap<QString, double> &results) { qDebug() << "绘图分析完成：" << analysisType; }
@@ -308,8 +318,6 @@ void MainWindow::onModelCalculationCompleted(const QString &analysisType, const 
     qDebug() << "模型计算完成：" << analysisType;
 }
 
-// [优化实现] 将数据推送到拟合页面 (公共接口，非自动调用)
-// 只有在明确需要从外部强制更新拟合数据时才调用此函数
 void MainWindow::transferDataToFitting()
 {
     if (!m_FittingPage || !m_DataEditorWidget) return;
@@ -320,13 +328,11 @@ void MainWindow::transferDataToFitting()
     QVector<double> tVec, pVec, dVec;
     double p_initial = 0.0;
 
-    // 1. 获取初始压力
     for(int r=0; r<model->rowCount(); ++r) {
         double p = model->index(r, 1).data().toDouble();
         if (std::abs(p) > 1e-6) { p_initial = p; break; }
     }
 
-    // 2. 提取数据（时间与压差）
     for(int r=0; r<model->rowCount(); ++r) {
         double t = model->index(r, 0).data().toDouble();
         double p_raw = model->index(r, 1).data().toDouble();
@@ -336,8 +342,6 @@ void MainWindow::transferDataToFitting()
         }
     }
 
-    // 3. 委托计算
-    // 使用静态方法直接计算导数，代码更整洁
     if (tVec.size() > 2) {
         dVec = PressureDerivativeCalculator::calculateBourdetDerivative(tVec, pVec, 0.1);
     } else {
@@ -345,7 +349,6 @@ void MainWindow::transferDataToFitting()
         dVec.fill(0.0);
     }
 
-    // 4. 推送结果
     m_FittingPage->setObservedDataToCurrent(tVec, pVec, dVec);
 }
 
@@ -400,3 +403,4 @@ QString MainWindow::getMessageBoxStyle() const
 {
     return getGlobalMessageBoxStyle();
 }
+

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>500</width>
-    <height>450</height>
+    <width>550</width>
+    <height>480</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -269,16 +269,21 @@ QTableWidget {
        <item>
         <widget class="QTableWidget" name="tableGraphs">
          <property name="columnCount">
-          <number>2</number>
+          <number>3</number>
          </property>
          <column>
           <property name="text">
-           <string>曲线索引</string>
+           <string>样式</string>
           </property>
          </column>
          <column>
           <property name="text">
            <string>曲线名称</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>显示</string>
           </property>
          </column>
         </widget>

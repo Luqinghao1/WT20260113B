@@ -5,7 +5,7 @@
  * 1. 声明主窗口框架及各个子功能模块指针。
  * 2. 引入 ModelManager 头文件以访问模型系统。
  * 3. 定义主窗口与各个子模块（项目、数据、绘图、拟合）之间的交互接口。
- * 4. [修正] 保持接口简洁，不再包含多余的自动计算逻辑。
+ * 4. [新增] 增加了 onViewExportedFile 槽函数，处理从图表导出的文件跳转。
  */
 
 #ifndef MAINWINDOW_H
@@ -60,6 +60,9 @@ private slots:
     void onTransferDataToPlotting();       // 请求将数据传输给绘图模块
     void onDataEditorDataChanged();        // 数据编辑器中数据发生变化
 
+    // [新增] 处理从图表界面导出的文件查看请求
+    void onViewExportedFile(const QString& filePath);
+
     // --- 设置与计算相关槽函数 ---
     void onSystemSettingsChanged();        // 系统设置变更
     void onPerformanceSettingsChanged();   // 性能设置变更
@@ -91,7 +94,6 @@ private:
     void updateNavigationState();
 
     // [保留接口] 将当前活动的观测数据传输给拟合模块
-    // 注意：此函数不应自动调用，仅供特定用户操作触发
     void transferDataToFitting();
 
     // 获取当前活动的数据模型 (单个)

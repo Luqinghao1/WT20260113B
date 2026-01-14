@@ -1,11 +1,10 @@
 /*
- * chartsetting1.h
- * 文件作用：图表设置对话框类的头文件
- * 功能描述：
- * 1. 声明 ChartSetting1 类，继承自 QDialog
- * 2. 包含对图表对象 (MouseZoom/QCustomPlot) 和标题对象 (QCPTextElement) 的引用
- * 3. 声明用于初始化界面数据 (initData) 和应用设置 (applySettings) 的私有函数
- * 4. 声明界面按钮的槽函数
+ * 文件名: chartsetting1.h
+ * 文件作用: 图表设置对话框头文件
+ * 功能描述:
+ * 1. 提供对图表标题、坐标轴范围、刻度类型（对数/线性）、网格线等属性的设置界面。
+ * 2. [新增] 提供曲线列表管理功能，支持查看曲线样式、修改曲线名称以及控制曲线的显示/隐藏。
+ * 3. 继承自 QDialog，通过 applySettings 将修改应用到 MouseZoom (QCustomPlot) 对象。
  */
 
 #ifndef CHARTSETTING1_H
